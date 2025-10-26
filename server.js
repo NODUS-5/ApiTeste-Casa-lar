@@ -230,6 +230,40 @@ app.put('/api/acolhidos/:id', upload.single('assinatura'), async (req, res) => {
   }
 });
 
+// Toggle ativo/inativo para acolhidos
+app.patch('/api/acolhidos/:id/ativo', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ativo } = req.body || {};
+    if (ativo === undefined) return res.status(400).json({ message: 'Campo "ativo" é obrigatório (true/false)' });
+    const inativo = (ativo === 'true' || ativo === true) ? 0 : 1;
+    await query('UPDATE acolhidos SET inativo = ? WHERE id_acolhido = ?', [inativo, id]);
+    const rows = await query(`
+      SELECT 
+        id_acolhido AS id,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        DATE_FORMAT(nascimento_genitores,'%Y-%m-%d') AS nascimentoGenitores,
+        rua,
+        bairro,
+        cidade,
+        responsavel,
+        DATE_FORMAT(data_hora_acolhimento,'%Y-%m-%d %H:%i:%s') AS dataHoraAcolhimento,
+        orgao_responsavel AS orgaoResponsavel,
+        profissional,
+        motivo,
+        possui_agressao AS possuiAgressao,
+        assinatura_url AS assinaturaUrl,
+        inativo
+      FROM acolhidos WHERE id_acolhido = ?
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao alterar status', error: err.message });
+  }
+});
+
 app.get('/api/escolar', (req, res) => res.json(paginated(escolar)));
 app.post('/api/escolar', (req, res) => {
   const payload = req.body || {};
@@ -242,6 +276,35 @@ app.put('/api/escolar/:id', (req, res) => {
   if (idx === -1) return res.status(404).json({ message: 'Não encontrado' });
   escolar[idx] = { ...escolar[idx], ...(req.body || {}) };
   res.json(escolar[idx]);
+});
+
+// Toggle ativo/inativo para escolar (MySQL)
+app.patch('/api/escolar/:id/ativo', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ativo } = req.body || {};
+    if (ativo === undefined) return res.status(400).json({ message: 'Campo "ativo" é obrigatório (true/false)' });
+    const inativo = (ativo === 'true' || ativo === true) ? 0 : 1;
+    await query('UPDATE escolar SET inativo = ? WHERE id_escolar = ?', [inativo, id]);
+    const rows = await query(`
+      SELECT 
+        id_escolar AS id,
+        id_acolhido AS idAcolhido,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        serie_turma AS serieTurma,
+        professor,
+        escola,
+        ano_letivo AS anoLetivo,
+        observacoes,
+        inativo
+      FROM escolar WHERE id_escolar = ?
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao alterar status', error: err.message });
+  }
 });
 
 
@@ -259,11 +322,51 @@ app.put('/api/apadrinhamentos/:id', (req, res) => {
   res.json(apadrinhamentos[idx]);
 });
 
+// Toggle ativo/inativo para apadrinhamentos (MySQL)
+app.patch('/api/apadrinhamentos/:id/ativo', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ativo } = req.body || {};
+    if (ativo === undefined) return res.status(400).json({ message: 'Campo "ativo" é obrigatório (true/false)' });
+    const inativo = (ativo === 'true' || ativo === true) ? 0 : 1;
+    await query('UPDATE apadrinhamentos SET inativo = ? WHERE id_apadrinhamento = ?', [inativo, id]);
+    const rows = await query(`
+      SELECT 
+        id_apadrinhamento AS id,
+        id_acolhido AS idAcolhido,
+        nome_padrinho AS nomePadrinho,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        naturalidade,
+        rg,
+        cpf,
+        estado_civil AS estadoCivil,
+        nome_conjuge AS nomeConjuge,
+        endereco,
+        telefone,
+        profissao,
+        endereco_profissional AS enderecoProfissional,
+        escolaridade,
+        email,
+        DATE_FORMAT(data_inicio,'%Y-%m-%d') AS dataInicio,
+        DATE_FORMAT(data_fim,'%Y-%m-%d') AS dataFim,
+        status,
+        observacoes,
+        inativo
+      FROM apadrinhamentos WHERE id_apadrinhamento = ?
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao alterar status', error: err.message });
+  }
+});
+
 // --- Voluntarios (MySQL) ---
 app.get('/api/voluntarios', async (req, res) => {
   try {
     const rows = await query(`
       SELECT 
+        id_voluntario AS id,
         nome,
         DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
         naturalidade,
@@ -329,7 +432,7 @@ app.post('/api/voluntarios', async (req, res) => {
 
     const rows = await query(`
       SELECT 
-        
+        id_voluntario AS id,
         nome,
         DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
         naturalidade,
@@ -425,6 +528,44 @@ app.put('/api/voluntarios/:id', async (req, res) => {
     res.json(rows[0]);
   } catch (err) {
     res.status(500).json({ message: 'Erro ao atualizar voluntário', error: err.message });
+  }
+});
+
+// Toggle ativo/inativo para voluntários
+app.patch('/api/voluntarios/:id/ativo', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ativo } = req.body || {};
+    if (ativo === undefined) return res.status(400).json({ message: 'Campo "ativo" é obrigatório (true/false)' });
+    const inativo = (ativo === 'true' || ativo === true) ? 0 : 1;
+    await query('UPDATE voluntarios SET inativo = ? WHERE id_voluntario = ?', [inativo, id]);
+    const rows = await query(`
+      SELECT 
+        id_voluntario AS id,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        naturalidade,
+        rg,
+        cpf,
+        endereco,
+        numero,
+        bairro,
+        cidade,
+        telefone,
+        celular,
+        profissao,
+        escolaridade,
+        email,
+        area_atuacao AS areaAtuacao,
+        disponibilidade,
+        DATE_FORMAT(data_inicio,'%Y-%m-%d') AS dataInicio,
+        inativo
+      FROM voluntarios WHERE id_voluntario = ?
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao alterar status', error: err.message });
   }
 });
 
@@ -645,6 +786,47 @@ app.put('/api/funcionarios/:id', upload.single('documentos'), async (req, res) =
   }
 });
 
+// Toggle ativo/inativo para funcionários (colaboradores)
+app.patch('/api/funcionarios/:id/ativo', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ativo } = req.body || {};
+    if (ativo === undefined) return res.status(400).json({ message: 'Campo "ativo" é obrigatório (true/false)' });
+    const inativo = (ativo === 'true' || ativo === true) ? 0 : 1;
+    await query('UPDATE colaboradores SET inativo = ? WHERE id_colaborador = ?', [inativo, id]);
+    const rows = await query(`
+      SELECT
+        id_colaborador AS id,
+        nome_colab AS nomeColab,
+        DATE_FORMAT(data_admissao,'%Y-%m-%d') AS dataAdmissao,
+        escolaridade,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        genero,
+        cpf,
+        rg,
+        DATE_FORMAT(data_emissao_rg,'%Y-%m-%d') AS dataEmissaoRg,
+        orgao_emissor_rg AS orgaoEmissorRg,
+        email,
+        naturalidade,
+        cep,
+        logradouro,
+        numero,
+        complemento,
+        bairro,
+        celular,
+        profissao,
+        voluntario,
+        inativo,
+        acesso_sistema AS acessoSistema
+      FROM colaboradores WHERE id_colaborador = ?
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao alterar status', error: err.message });
+  }
+});
+
 const agenda = [];
 
 
@@ -671,6 +853,35 @@ app.put('/api/agenda/:id', (req, res) => {
   if (idx === -1) return res.status(404).json({ message: 'Não encontrado' });
   agenda[idx] = { ...agenda[idx], ...(req.body || {}) };
   res.json(agenda[idx]);
+});
+
+// Toggle ativo/inativo para reforço escolar (MySQL)
+app.patch('/api/reforco-escolar/:id/ativo', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { ativo } = req.body || {};
+    if (ativo === undefined) return res.status(400).json({ message: 'Campo "ativo" é obrigatório (true/false)' });
+    const inativo = (ativo === 'true' || ativo === true) ? 0 : 1;
+    await query('UPDATE reforco_escolar SET inativo = ? WHERE id_reforco = ?', [inativo, id]);
+    const rows = await query(`
+      SELECT 
+        id_reforco AS id,
+        id_acolhido AS idAcolhido,
+        disciplina,
+        professor_reforco AS professorReforco,
+        dia_semana AS diaSemana,
+        TIME_FORMAT(horario, '%H:%i:%s') AS horario,
+        DATE_FORMAT(data_inicio,'%Y-%m-%d') AS dataInicio,
+        DATE_FORMAT(data_fim,'%Y-%m-%d') AS dataFim,
+        observacoes,
+        inativo
+      FROM reforco_escolar WHERE id_reforco = ?
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao alterar status', error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
