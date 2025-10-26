@@ -428,29 +428,221 @@ app.put('/api/voluntarios/:id', async (req, res) => {
   }
 });
 
-app.get('/api/funcionarios', (req, res) => res.json(paginated(funcionarios)));
-app.post('/api/funcionarios', upload.single('documentos'), (req, res) => {
-  const payload = req.body || {};
-  const novo = {
-    id: makeId('func'),
-    ...payload,
-    documentosUrl: req.file ? '/uploads/documento-demo.pdf' : null
-  };
-  funcionarios.push(novo);
-  res.status(201).json(novo);
+// --- Funcionarios (colaboradores) MySQL ---
+app.get('/api/funcionarios', async (req, res) => {
+  try {
+    const rows = await query(`
+      SELECT
+        id_colaborador AS id,
+        nome_colab AS nomeColab,
+        DATE_FORMAT(data_admissao,'%Y-%m-%d') AS dataAdmissao,
+        escolaridade,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        genero,
+        cpf,
+        rg,
+        DATE_FORMAT(data_emissao_rg,'%Y-%m-%d') AS dataEmissaoRg,
+        orgao_emissor_rg AS orgaoEmissorRg,
+        email,
+        naturalidade,
+        cep,
+        logradouro,
+        numero,
+        complemento,
+        bairro,
+        celular,
+        profissao,
+        voluntario,
+        inativo,
+        acesso_sistema AS acessoSistema
+      FROM colaboradores
+      ORDER BY id_colaborador DESC
+    `);
+    res.json({ items: rows, page: 1, pageSize: rows.length, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao listar funcionários', error: err.message });
+  }
 });
-app.put('/api/funcionarios/:id', upload.single('documentos'), (req, res) => {
-  const idx = funcionarios.findIndex(x => x.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ message: 'Não encontrado' });
-  const current = funcionarios[idx];
-  const patch = req.body || {};
-  const updated = {
-    ...current,
-    ...patch,
-    documentosUrl: req.file ? '/uploads/documento-demo.pdf' : current.documentosUrl ?? null
-  };
-  funcionarios[idx] = updated;
-  res.json(updated);
+
+app.post('/api/funcionarios', upload.single('documentos'), async (req, res) => {
+  try {
+    const p = req.body || {};
+    const required = [
+      'nomeColab','dataAdmissao','escolaridade','dataNascimento','genero','cpf','rg',
+      'dataEmissaoRg','orgaoEmissorRg','email','naturalidade','cep','logradouro','numero',
+      'bairro','celular','profissao','senhaSistema'
+    ];
+    const missing = required.filter(k => p[k] === undefined || p[k] === null || p[k] === '');
+    if (missing.length) return res.status(400).json({ message: `Campos obrigatórios: ${missing.join(', ')}` });
+
+    const voluntario = p.voluntario === 'true' || p.voluntario === true ? 1 : 0;
+    const inativo = p.inativo === 'true' || p.inativo === true ? 1 : 0;
+    const acessoSistema = p.acessoSistema === 'true' || p.acessoSistema === true ? 1 : 0;
+    const numero = Number.isNaN(Number(p.numero)) ? null : Number(p.numero);
+    if (numero === null) return res.status(400).json({ message: 'numero deve ser inteiro' });
+
+    const sql = `
+      INSERT INTO colaboradores (
+        nome_colab, data_admissao, escolaridade, data_nascimento, genero, cpf, rg,
+        data_emissao_rg, orgao_emissor_rg, email, naturalidade, cep, logradouro, numero,
+        complemento, bairro, celular, profissao, voluntario, inativo, acesso_sistema, senha_sistema
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const params = [
+      p.nomeColab,
+      p.dataAdmissao,
+      p.escolaridade,
+      p.dataNascimento,
+      p.genero,
+      p.cpf,
+      p.rg,
+      p.dataEmissaoRg,
+      p.orgaoEmissorRg,
+      p.email,
+      p.naturalidade,
+      p.cep,
+      p.logradouro,
+      numero,
+      p.complemento || null,
+      p.bairro,
+      p.celular,
+      p.profissao,
+      voluntario,
+      inativo,
+      acessoSistema,
+      p.senhaSistema
+    ];
+
+    const result = await query(sql, params);
+    const insertedId = result.insertId;
+    const rows = await query(`
+      SELECT
+        id_colaborador AS id,
+        nome_colab AS nomeColab,
+        DATE_FORMAT(data_admissao,'%Y-%m-%d') AS dataAdmissao,
+        escolaridade,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        genero,
+        cpf,
+        rg,
+        DATE_FORMAT(data_emissao_rg,'%Y-%m-%d') AS dataEmissaoRg,
+        orgao_emissor_rg AS orgaoEmissorRg,
+        email,
+        naturalidade,
+        cep,
+        logradouro,
+        numero,
+        complemento,
+        bairro,
+        celular,
+        profissao,
+        voluntario,
+        inativo,
+        acesso_sistema AS acessoSistema
+      FROM colaboradores WHERE id_colaborador = ?
+    `, [insertedId]);
+
+    // compat: retorna também um documentosUrl if file provided (não persiste em DB)
+    const created = rows[0] || {};
+    if (req.file) created.documentosUrl = '/uploads/documento-demo.pdf';
+    res.status(201).json(created);
+  } catch (err) {
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ message: 'CPF ou Email já cadastrados', error: err.message });
+    }
+    res.status(500).json({ message: 'Erro ao criar funcionário', error: err.message });
+  }
+});
+
+app.put('/api/funcionarios/:id', upload.single('documentos'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const p = req.body || {};
+    const fieldsMap = {
+      nomeColab: 'nome_colab',
+      dataAdmissao: 'data_admissao',
+      escolaridade: 'escolaridade',
+      dataNascimento: 'data_nascimento',
+      genero: 'genero',
+      cpf: 'cpf',
+      rg: 'rg',
+      dataEmissaoRg: 'data_emissao_rg',
+      orgaoEmissorRg: 'orgao_emissor_rg',
+      email: 'email',
+      naturalidade: 'naturalidade',
+      cep: 'cep',
+      logradouro: 'logradouro',
+      numero: 'numero',
+      complemento: 'complemento',
+      bairro: 'bairro',
+      celular: 'celular',
+      profissao: 'profissao',
+      voluntario: 'voluntario',
+      inativo: 'inativo',
+      acessoSistema: 'acesso_sistema',
+      senhaSistema: 'senha_sistema'
+    };
+
+    const sets = [];
+    const params = [];
+
+    for (const [k, vRaw] of Object.entries(p)) {
+      if (!(k in fieldsMap)) continue;
+      let v = vRaw;
+      if (['voluntario','inativo','acessoSistema'].includes(k)) {
+        v = (vRaw === 'true' || vRaw === true) ? 1 : 0;
+      }
+      if (k === 'numero') {
+        const n = Number(vRaw);
+        if (Number.isNaN(n)) return res.status(400).json({ message: 'numero deve ser inteiro' });
+        v = n;
+      }
+      sets.push(`${fieldsMap[k]} = ?`);
+      params.push(v === '' ? null : v);
+    }
+
+    if (!sets.length) return res.status(400).json({ message: 'Nenhum campo para atualizar' });
+    const sql = `UPDATE colaboradores SET ${sets.join(', ')} WHERE id_colaborador = ?`;
+    params.push(id);
+    await query(sql, params);
+
+    const rows = await query(`
+      SELECT
+        id_colaborador AS id,
+        nome_colab AS nomeColab,
+        DATE_FORMAT(data_admissao,'%Y-%m-%d') AS dataAdmissao,
+        escolaridade,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        genero,
+        cpf,
+        rg,
+        DATE_FORMAT(data_emissao_rg,'%Y-%m-%d') AS dataEmissaoRg,
+        orgao_emissor_rg AS orgaoEmissorRg,
+        email,
+        naturalidade,
+        cep,
+        logradouro,
+        numero,
+        complemento,
+        bairro,
+        celular,
+        profissao,
+        voluntario,
+        inativo,
+        acesso_sistema AS acessoSistema
+      FROM colaboradores WHERE id_colaborador = ?
+    `, [id]);
+
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    const updated = rows[0];
+    if (req.file) updated.documentosUrl = '/uploads/documento-demo.pdf';
+    res.json(updated);
+  } catch (err) {
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ message: 'CPF ou Email já cadastrados', error: err.message });
+    }
+    res.status(500).json({ message: 'Erro ao atualizar funcionário', error: err.message });
+  }
 });
 
 const agenda = [];
