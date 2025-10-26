@@ -3,6 +3,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const { initDb, query } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -24,6 +25,15 @@ let TOKENS = {
   expiresAt: Date.now() + 60 * 60 * 1000 // 1h
 };
 app.get('/api', (req, res) => res.json({ ok: true }));
+// endpoint para validar conexão com o banco
+app.get('/api/db/ping', async (req, res) => {
+  try {
+    const rows = await query('SELECT 1 AS ok');
+    res.json({ db: 'casalar', ok: rows?.[0]?.ok === 1 });
+  } catch (err) {
+    res.status(500).json({ error: true, message: err.message });
+  }
+});
 app.post('/api/auth/login', (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ message: 'Credenciais inválidas' });
@@ -58,41 +68,166 @@ const funcionarios = [];
 const paginated = (arr) => ({ items: arr, page: 1, pageSize: arr.length || 10, total: arr.length });
 
 // --- Acolhidos ---
-app.get('/api/acolhidos', (req, res) => res.json(paginated(acolhidos)));
-app.post('/api/acolhidos', upload.single('assinatura'), (req, res) => {
-  const payload = req.body || {};
-  const novo = {
-    id: makeId('acolhido'),
-    nome: payload.nome,
-    dataNascimento: payload.dataNascimento,
-    nascimentoGenitores: payload.nascimentoGenitores,
-    rua: payload.rua,
-    bairro: payload.bairro,
-    cidade: payload.cidade,
-    responsavel: payload.responsavel,
-    dataHoraAcolhimento: payload.dataHoraAcolhimento,
-    orgaoResponsavel: payload.orgaoResponsavel,
-    profissional: payload.profissional,
-    motivo: payload.motivo,
-    possuiAgressao: payload.possuiAgressao === 'true' || payload.possuiAgressao === true,
-    assinaturaUrl: req.file ? '/uploads/assinatura-demo.png' : null
-  };
-  acolhidos.push(novo);
-  res.status(201).json(novo);
+// --- Acolhidos (MySQL) ---
+app.get('/api/acolhidos', async (req, res) => {
+  try {
+    const rows = await query(`
+      SELECT 
+        id_acolhido AS id,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        DATE_FORMAT(nascimento_genitores,'%Y-%m-%d') AS nascimentoGenitores,
+        rua,
+        bairro,
+        cidade,
+        responsavel,
+        DATE_FORMAT(data_hora_acolhimento,'%Y-%m-%d %H:%i:%s') AS dataHoraAcolhimento,
+        orgao_responsavel AS orgaoResponsavel,
+        profissional,
+        motivo,
+        possui_agressao AS possuiAgressao,
+        assinatura_url AS assinaturaUrl,
+        inativo
+      FROM acolhidos
+      ORDER BY id_acolhido DESC
+    `);
+    res.json({ items: rows, page: 1, pageSize: rows.length, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao listar acolhidos', error: err.message });
+  }
 });
-app.put('/api/acolhidos/:id', upload.single('assinatura'), (req, res) => {
-  const idx = acolhidos.findIndex(x => x.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ message: 'Não encontrado' });
-  const current = acolhidos[idx];
-  const patch = req.body || {};
-  const updated = {
-    ...current,
-    ...patch,
-    possuiAgressao: patch.possuiAgressao === 'true' || patch.possuiAgressao === true || current.possuiAgressao,
-    assinaturaUrl: req.file ? '/uploads/assinatura-demo.png' : current.assinaturaUrl ?? null
-  };
-  acolhidos[idx] = updated;
-  res.json(updated);
+
+app.post('/api/acolhidos', upload.single('assinatura'), async (req, res) => {
+  try {
+    const p = req.body || {};
+    const required = ['nome', 'dataNascimento', 'dataHoraAcolhimento'];
+    const missing = required.filter(k => !p[k]);
+    if (missing.length) return res.status(400).json({ message: `Campos obrigatórios: ${missing.join(', ')}` });
+
+    const assinaturaUrl = req.file ? '/uploads/assinatura-demo.png' : (p.assinaturaUrl ?? null);
+    const possuiAgressao = p.possuiAgressao === 'true' || p.possuiAgressao === true ? 1 : 0;
+
+    const sql = `
+      INSERT INTO acolhidos (
+        nome, data_nascimento, nascimento_genitores, rua, bairro, cidade,
+        responsavel, data_hora_acolhimento, orgao_responsavel, profissional,
+        motivo, possui_agressao, assinatura_url
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const params = [
+      p.nome,
+      p.dataNascimento,
+      p.nascimentoGenitores || null,
+      p.rua || null,
+      p.bairro || null,
+      p.cidade || null,
+      p.responsavel || null,
+      p.dataHoraAcolhimento,
+      p.orgaoResponsavel || null,
+      p.profissional || null,
+      p.motivo || null,
+      possuiAgressao,
+      assinaturaUrl
+    ];
+
+    const result = await query(sql, params);
+    const insertedId = result.insertId;
+    const rows = await query(`
+      SELECT 
+        id_acolhido AS id,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        DATE_FORMAT(nascimento_genitores,'%Y-%m-%d') AS nascimentoGenitores,
+        rua,
+        bairro,
+        cidade,
+        responsavel,
+        DATE_FORMAT(data_hora_acolhimento,'%Y-%m-%d %H:%i:%s') AS dataHoraAcolhimento,
+        orgao_responsavel AS orgaoResponsavel,
+        profissional,
+        motivo,
+        possui_agressao AS possuiAgressao,
+        assinatura_url AS assinaturaUrl,
+        inativo
+      FROM acolhidos WHERE id_acolhido = ?
+    `, [insertedId]);
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao criar acolhido', error: err.message });
+  }
+});
+
+app.put('/api/acolhidos/:id', upload.single('assinatura'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const p = req.body || {};
+    const fieldsMap = {
+      nome: 'nome',
+      dataNascimento: 'data_nascimento',
+      nascimentoGenitores: 'nascimento_genitores',
+      rua: 'rua',
+      bairro: 'bairro',
+      cidade: 'cidade',
+      responsavel: 'responsavel',
+      dataHoraAcolhimento: 'data_hora_acolhimento',
+      orgaoResponsavel: 'orgao_responsavel',
+      profissional: 'profissional',
+      motivo: 'motivo',
+      possuiAgressao: 'possui_agressao',
+      assinaturaUrl: 'assinatura_url',
+      inativo: 'inativo'
+    };
+
+    const sets = [];
+    const params = [];
+
+    if (req.file) {
+      p.assinaturaUrl = '/uploads/assinatura-demo.png';
+    }
+
+    for (const [k, v] of Object.entries(p)) {
+      if (!(k in fieldsMap)) continue;
+      if (k === 'possuiAgressao') {
+        sets.push(`${fieldsMap[k]} = ?`);
+        params.push(v === 'true' || v === true ? 1 : 0);
+      } else {
+        sets.push(`${fieldsMap[k]} = ?`);
+        params.push(v === '' ? null : v);
+      }
+    }
+
+    if (!sets.length) return res.status(400).json({ message: 'Nenhum campo para atualizar' });
+
+    const sql = `UPDATE acolhidos SET ${sets.join(', ')} WHERE id_acolhido = ?`;
+    params.push(id);
+    await query(sql, params);
+
+    const rows = await query(`
+      SELECT 
+        id_acolhido AS id,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        DATE_FORMAT(nascimento_genitores,'%Y-%m-%d') AS nascimentoGenitores,
+        rua,
+        bairro,
+        cidade,
+        responsavel,
+        DATE_FORMAT(data_hora_acolhimento,'%Y-%m-%d %H:%i:%s') AS dataHoraAcolhimento,
+        orgao_responsavel AS orgaoResponsavel,
+        profissional,
+        motivo,
+        possui_agressao AS possuiAgressao,
+        assinatura_url AS assinaturaUrl,
+        inativo
+      FROM acolhidos WHERE id_acolhido = ?
+    `, [id]);
+
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao atualizar acolhido', error: err.message });
+  }
 });
 
 app.get('/api/escolar', (req, res) => res.json(paginated(escolar)));
@@ -124,18 +259,173 @@ app.put('/api/apadrinhamentos/:id', (req, res) => {
   res.json(apadrinhamentos[idx]);
 });
 
-app.get('/api/voluntarios', (req, res) => res.json(paginated(voluntarios)));
-app.post('/api/voluntarios', (req, res) => {
-  const payload = req.body || {};
-  const novo = { id: makeId('vol'), ...payload };
-  voluntarios.push(novo);
-  res.status(201).json(novo);
+// --- Voluntarios (MySQL) ---
+app.get('/api/voluntarios', async (req, res) => {
+  try {
+    const rows = await query(`
+      SELECT 
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        naturalidade,
+        rg,
+        cpf,
+        endereco,
+        numero,
+        bairro,
+        cidade,
+        telefone,
+        celular,
+        profissao,
+        escolaridade,
+        email,
+        area_atuacao AS areaAtuacao,
+        disponibilidade,
+        DATE_FORMAT(data_inicio,'%Y-%m-%d') AS dataInicio,
+        inativo
+      FROM voluntarios
+      ORDER BY id_voluntario DESC
+    `);
+    res.json({ items: rows, page: 1, pageSize: rows.length, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao listar voluntários', error: err.message });
+  }
 });
-app.put('/api/voluntarios/:id', (req, res) => {
-  const idx = voluntarios.findIndex(x => x.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ message: 'Não encontrado' });
-  voluntarios[idx] = { ...voluntarios[idx], ...(req.body || {}) };
-  res.json(voluntarios[idx]);
+
+app.post('/api/voluntarios', async (req, res) => {
+  try {
+    const p = req.body || {};
+    const required = ['nome', 'dataNascimento'];
+    const missing = required.filter(k => !p[k]);
+    if (missing.length) return res.status(400).json({ message: `Campos obrigatórios: ${missing.join(', ')}` });
+
+    const sql = `
+      INSERT INTO voluntarios (
+        nome, data_nascimento, naturalidade, rg, cpf, endereco, numero, bairro, cidade,
+        telefone, celular, profissao, escolaridade, email, area_atuacao, disponibilidade, data_inicio
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const params = [
+      p.nome,
+      p.dataNascimento,
+      p.naturalidade || null,
+      p.rg || null,
+      p.cpf || null,
+      p.endereco || null,
+      p.numero || null,
+      p.bairro || null,
+      p.cidade || null,
+      p.telefone || null,
+      p.celular || null,
+      p.profissao || null,
+      p.escolaridade || null,
+      p.email || null,
+      p.areaAtuacao || null,
+      p.disponibilidade || null,
+      p.dataInicio || null
+    ];
+
+    const result = await query(sql, params);
+    const insertedId = result.insertId;
+
+    const rows = await query(`
+      SELECT 
+        
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        naturalidade,
+        rg,
+        cpf,
+        endereco,
+        numero,
+        bairro,
+        cidade,
+        telefone,
+        celular,
+        profissao,
+        escolaridade,
+        email,
+        area_atuacao AS areaAtuacao,
+        disponibilidade,
+        DATE_FORMAT(data_inicio,'%Y-%m-%d') AS dataInicio,
+        inativo
+      FROM voluntarios WHERE id_voluntario = ?
+    `, [insertedId]);
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao criar voluntário', error: err.message });
+  }
+});
+
+app.put('/api/voluntarios/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const p = req.body || {};
+    const fieldsMap = {
+      nome: 'nome',
+      dataNascimento: 'data_nascimento',
+      naturalidade: 'naturalidade',
+      rg: 'rg',
+      cpf: 'cpf',
+      endereco: 'endereco',
+      numero: 'numero',
+      bairro: 'bairro',
+      cidade: 'cidade',
+      telefone: 'telefone',
+      celular: 'celular',
+      profissao: 'profissao',
+      escolaridade: 'escolaridade',
+      email: 'email',
+      areaAtuacao: 'area_atuacao',
+      disponibilidade: 'disponibilidade',
+      dataInicio: 'data_inicio',
+      inativo: 'inativo'
+    };
+
+    const sets = [];
+    const params = [];
+
+    for (const [k, v] of Object.entries(p)) {
+      if (!(k in fieldsMap)) continue;
+      sets.push(`${fieldsMap[k]} = ?`);
+      params.push(v === '' ? null : v);
+    }
+
+    if (!sets.length) return res.status(400).json({ message: 'Nenhum campo para atualizar' });
+
+    const sql = `UPDATE voluntarios SET ${sets.join(', ')} WHERE id_voluntario = ?`;
+    params.push(id);
+    await query(sql, params);
+
+    const rows = await query(`
+      SELECT 
+        id_voluntario AS id,
+        nome,
+        DATE_FORMAT(data_nascimento,'%Y-%m-%d') AS dataNascimento,
+        naturalidade,
+        rg,
+        cpf,
+        endereco,
+        numero,
+        bairro,
+        cidade,
+        telefone,
+        celular,
+        profissao,
+        escolaridade,
+        email,
+        area_atuacao AS areaAtuacao,
+        disponibilidade,
+        DATE_FORMAT(data_inicio,'%Y-%m-%d') AS dataInicio,
+        inativo
+      FROM voluntarios WHERE id_voluntario = ?
+    `, [id]);
+
+    if (!rows.length) return res.status(404).json({ message: 'Não encontrado' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ message: 'Erro ao atualizar voluntário', error: err.message });
+  }
 });
 
 app.get('/api/funcionarios', (req, res) => res.json(paginated(funcionarios)));
@@ -192,6 +482,14 @@ app.put('/api/agenda/:id', (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`API de teste rodando em http://localhost:${PORT}/api`);
-});
+// Inicializa banco e só então inicia o servidor
+initDb()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Banco 'casalar' conectado. API em http://localhost:${PORT}/api`);
+    });
+  })
+  .catch((err) => {
+    console.error('Falha ao inicializar o banco:', err);
+    process.exit(1);
+  });
